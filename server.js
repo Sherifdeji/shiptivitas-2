@@ -163,15 +163,39 @@ app.put("/api/v1/clients/:id", (req, res) => {
     const newPriority =
       priority !== undefined ? parseInt(priority, 10) : oldPriority;
 
-    // 3. Shift priorities down in the old swimlane to fill the gap
-    db.prepare(
-      "UPDATE clients SET priority = priority - 1 WHERE status = ? AND priority > ?"
-    ).run(oldStatus, oldPriority);
+    // Handle same-swimlane reordering vs cross-swimlane moves differently
+    if (oldStatus === newStatus) {
+      // Same swimlane reordering: adjust priorities in a single step
+      console.log("Same swimlane reorder:", { oldPriority, newPriority });
+      
+      if (oldPriority < newPriority) {
+        // Moving down: shift cards between old+1 and new positions up by 1
+        // This makes room for the card at its new position
+        db.prepare(
+          "UPDATE clients SET priority = priority - 1 WHERE status = ? AND priority > ? AND priority <= ?"
+        ).run(newStatus, oldPriority, newPriority);
+        console.log("Moving down: shifted priorities >", oldPriority, "and <=", newPriority);
+      } else if (oldPriority > newPriority) {
+        // Moving up: shift cards between new and old-1 positions down by 1
+        // This makes room for the card at its new position
+        db.prepare(
+          "UPDATE clients SET priority = priority + 1 WHERE status = ? AND priority >= ? AND priority < ?"
+        ).run(newStatus, newPriority, oldPriority);
+        console.log("Moving up: shifted priorities >=", newPriority, "and <", oldPriority);
+      }
+      // If oldPriority === newPriority, no reordering needed
+    } else {
+      // Cross-swimlane move: apply both removal and insertion logic
+      // 3. Shift priorities down in the old swimlane to fill the gap
+      db.prepare(
+        "UPDATE clients SET priority = priority - 1 WHERE status = ? AND priority > ?"
+      ).run(oldStatus, oldPriority);
 
-    // 4. Shift priorities up in the new swimlane to make space
-    db.prepare(
-      "UPDATE clients SET priority = priority + 1 WHERE status = ? AND priority >= ?"
-    ).run(newStatus, newPriority);
+      // 4. Shift priorities up in the new swimlane to make space
+      db.prepare(
+        "UPDATE clients SET priority = priority + 1 WHERE status = ? AND priority >= ?"
+      ).run(newStatus, newPriority);
+    }
 
     // 5. Update the actual client's status and priority
     db.prepare("UPDATE clients SET status = ?, priority = ? WHERE id = ?").run(
